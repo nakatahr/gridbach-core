@@ -2,7 +2,7 @@
 Gridbach's core algorithmic logic
 
 ## Overview
-`gridbach-core` is the core computational logic of Gridbach, a grid computing system that verifies the Goldbach conjecture.
+`gridbach-core` is the core computational logic of Gridbach, a grid computing system that verifies the Goldbach conjecture updating the world record for the computational verification of the famous unsolved mathematical problem.
 
 Please visit the following site for more information about Gridbach:
 https://gridbach.com
@@ -25,12 +25,22 @@ cd gridbach-core
 go run .
 ```
 
+## Calculation Logic
+The calculation process consists of four main steps:
+
+1. Generate prime numbers for use in step 3. using the Sieve of Eratosthenes - `CreateRoot()`
+2. Generate reversed prime number sequences for use in step 4. - `CreateReverse()`
+3. Execute the Sieve of Eratosthenes on a 100 million length interval specified by jobId - the first half of `SieveAndVerify()`
+4. Verify the Goldbach conjecture through bitwise operations of prime number sequences and reversed prime number sequences - the latter half of `SieveAndVerify()`
+
+## TODO
+- Write a blog post to give detailed explanation about idea and technichs behind the algorithm
+- Add comments in the codes for clarity
+
 ## Licence
 
 [MIT](https://github.com/tcnksm/tool/blob/master/LICENCE)
 
 ## Author
 
-Hiroaki Jay Nakata
-
-https://gridbach.com/
+Hiroaki Jay Nakata https://gridbach.com/
