@@ -58,8 +58,10 @@ func LoadRoot() bool {
 	log.Print("LoadRoot()")
 
 	// Read a root file
-	var err error
-	root, err = os.ReadFile("root.bin")
-
-	return err == nil
+	data, err := os.ReadFile("root.bin")
+	if err != nil {
+		return false
+	}
+	root = data
+	return true
 }
