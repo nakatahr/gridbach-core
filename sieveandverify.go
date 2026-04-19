@@ -96,10 +96,9 @@ func SieveAndVerify(jobId uint64) bool {
 		// Subsequent jobs: advance nextMultCache to the new 'from'.
 		log.Print("[bench] advancing nextMultCache ...")
 		sp := uint64(3)
-		stepU := uint64(step)
 		for i := range nextMultCache {
 			var mm uint64
-			if sp < stepU {
+			if sp < uint64(step) {
 				// Small prime: recompute via division (avoids O(step/sp) nudge loop).
 				quot, rem := bits.Div64(0, from, sp)
 				if rem != 0 { quot++ }
