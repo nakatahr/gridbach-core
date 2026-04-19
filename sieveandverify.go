@@ -76,18 +76,18 @@ func SieveAndVerify(jobId uint64) bool {
 		// First call: compute from scratch via division.
 		log.Print("[bench] computing nextMultCache from scratch ...")
 		nextMultCache = make([]uint64, len(sievingPrimes)+1)
-		p := uint64(3)
+		sp := uint64(3)
 		for i := 0; ; i++ {
-			if p > uint64(xmax) {
+			if sp > uint64(xmax) {
 				nextMultCache = nextMultCache[:i]
 				break
 			}
-			q, r := bits.Div64(0, from, p)
-			if r != 0 { q++ }
-			if q&1 == 0 { q++ }
-			nextMultCache[i] = p * q
+			quot, rem := bits.Div64(0, from, sp)
+			if rem != 0 { quot++ }
+			if quot&1 == 0 { quot++ }
+			nextMultCache[i] = sp * quot
 			if i < len(sievingPrimes) {
-				p += 2 * uint64(sievingPrimes[i])
+				sp += 2 * uint64(sievingPrimes[i])
 			} else {
 				break
 			}
@@ -95,26 +95,26 @@ func SieveAndVerify(jobId uint64) bool {
 	} else {
 		// Subsequent jobs: advance nextMultCache to the new 'from'.
 		log.Print("[bench] advancing nextMultCache ...")
-		p := uint64(3)
+		sp := uint64(3)
 		stepU := uint64(step)
 		for i := range nextMultCache {
 			var mm uint64
-			if p < stepU {
-				// Small prime: recompute via division (avoids O(step/p) nudge loop).
-				q, r := bits.Div64(0, from, p)
-				if r != 0 { q++ }
-				if q&1 == 0 { q++ }
-				mm = p * q
+			if sp < stepU {
+				// Small prime: recompute via division (avoids O(step/sp) nudge loop).
+				quot, rem := bits.Div64(0, from, sp)
+				if rem != 0 { quot++ }
+				if quot&1 == 0 { quot++ }
+				mm = sp * quot
 			} else {
 				// Large prime: nudge at most once or twice.
 				mm = nextMultCache[i]
 				for mm < from {
-					mm += 2 * p
+					mm += 2 * sp
 				}
 			}
 			nextMultCache[i] = mm
 			if i < len(sievingPrimes) {
-				p += 2 * uint64(sievingPrimes[i])
+				sp += 2 * uint64(sievingPrimes[i])
 			}
 		}
 	}
@@ -125,9 +125,9 @@ func SieveAndVerify(jobId uint64) bool {
 	// Mark composite numbers in segment[].
 	//
 	// Profiling at origin=4e18, step=1e8 showed ~98M primes in nextMultCache:
-	//   ~3M   p < yz/2  "multi-mark"  — inner loop runs ≥2 times
-	//   ~9.5M p ≥ yz/2  "single-mark" — next multiple is the only one in range
-	//   ~85.8M          "dormant"     — ya ≥ yz, next multiple is outside range
+	//   ~3M   sp < yz/2  "multi-mark"  — inner loop runs ≥2 times
+	//   ~9.5M sp ≥ yz/2  "single-mark" — next multiple is the only one in range
+	//   ~85.8M           "dormant"     — ya ≥ yz, next multiple is outside range
 	//
 	// Skipping dormant primes early and using a direct mark for single-mark
 	// primes avoids inner-loop overhead for 97% of primes.
@@ -138,22 +138,22 @@ func SieveAndVerify(jobId uint64) bool {
 	// Separate tight loops remain faster.
 	tMark := time.Now()
 	halfYz := yz >> 1
-	p := uint64(3)
+	sp := uint64(3)
 	for i, cache := range nextMultCache {
 		ya := uint32(cache - from)
 		if ya < yz {
-			if uint32(p) >= halfYz {
+			if uint32(sp) >= halfYz {
 				// Large prime: next multiple is the only one in range.
 				segment[ya>>4] &= masks[(ya&15)>>1]
 			} else {
 				// Put off bit for every multiple.
-				for y := ya; y < yz; y += uint32(p) << 1 {
+				for y := ya; y < yz; y += uint32(sp) << 1 {
 					segment[y>>4] &= masks[(y&15)>>1]
 				}
 			}
 		}
 		if i < len(sievingPrimes) {
-			p += 2 * uint64(sievingPrimes[i])
+			sp += 2 * uint64(sievingPrimes[i])
 		}
 	}
 	log.Printf("[bench] marking: %d ms", time.Since(tMark).Milliseconds())
