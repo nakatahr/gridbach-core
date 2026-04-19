@@ -16,16 +16,24 @@ var step = uint32(1 * math.Pow10(8))
 var origin = uint64(4 * math.Pow10(18))
 
 func main() {
-    if (!LoadRoot()){
-        if (!CreateRoot()){
+    if !LoadRoot() {
+        if !CreateRoot() {
             log.Print("Cannot create or load root file")
+            return
+        }
+    }
+
+    if !LoadPrimeGaps() {
+        if !BuildPrimes() {
+            log.Print("Cannot create or load prime gaps file")
+            return
         }
     }
 
     CreateReverse()
 
     var i uint64
-    for i=1; i<=3; i++{
+    for i = 1; i <= 3; i++ {
         SieveAndVerify(i)
     }
 }
