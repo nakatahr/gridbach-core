@@ -86,6 +86,16 @@ func SieveAndVerify(jobId uint64) bool {
 	// — up to 16M iterations for p=3 — so we recompute via bits.Div64
 	// instead.  For large primes (p >= step), the stored value is at most
 	// one step behind, so the nudge loop runs 0 or 1 times and is cheap.
+	// nextMultCache[i] = the absolute odd number that is the smallest
+	// multiple of prime[i] that is >= from.  Stored as an absolute value
+	// (not an offset) so that the advance step for subsequent jobs is a
+	// simple nudge (or one division for small primes) rather than a full
+	// recomputation from scratch every time.
+	//
+	// For small primes (p < step), the nudge loop would run step/(2p) times
+	// — up to 16M iterations for p=3 — so we recompute via bits.Div64
+	// instead.  For large primes (p >= step), the stored value is at most
+	// one step behind, so the nudge loop runs 0 or 1 times and is cheap.
 	if nextMultCache == nil || nextMultCacheFrom == 0 {
 		// First call: compute from scratch via division.
 		log.Print("[bench] computing nextMultCache from scratch ...")
@@ -137,12 +147,34 @@ func SieveAndVerify(jobId uint64) bool {
 	log.Printf("[bench] cache build/update: %d ms", time.Since(tSieve).Milliseconds())
 
 	// Mark composite numbers in prime[].
+	//
+	// Profiling at origin=4e18, step=1e8 showed ~98M primes in nextMultCache:
+	//   ~3M   p < yz/2  "multi-mark"  — inner loop runs ≥2 times
+	//   ~9.5M p ≥ yz/2  "single-mark" — next multiple is the only one in range
+	//   ~85.8M          "dormant"     — ya ≥ yz, next multiple is outside range
+	//
+	// Skipping dormant primes early and using a direct mark for single-mark
+	// primes avoids inner-loop overhead for 97% of primes.
+	//
+	// Note: loop fusion (advance+mark in one pass) was tried and benchmarked
+	// ~33% slower due to the larger loop body breaking CPU IPC/prefetch. The
+	// memory-bandwidth savings (~44ms) were outweighed by the IPC loss (~200ms).
+	// Separate tight loops remain faster.
 	tMark := time.Now()
+	halfYz := yz >> 1
 	p := uint64(3)
 	for i, cache := range nextMultCache {
 		ya := uint32(cache - from)
-		for y := ya; y < yz; y += uint32(p) << 1 {
-			prime[y>>4] &= masks[(y&15)>>1]
+		if ya < yz {
+			if uint32(p) >= halfYz {
+				// Large prime: next multiple is the only one in range.
+				prime[ya>>4] &= masks[(ya&15)>>1]
+			} else {
+				// Small prime: mark all multiples in range.
+				for y := ya; y < yz; y += uint32(p) << 1 {
+					prime[y>>4] &= masks[(y&15)>>1]
+				}
+			}
 		}
 		if i < len(primeGaps) {
 			p += 2 * uint64(primeGaps[i])
