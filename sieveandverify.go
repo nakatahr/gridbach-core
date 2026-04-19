@@ -2,6 +2,7 @@
 package main
 
 import (
+	"encoding/binary"
 	"log"
 	"math"
 	"math/bits"
@@ -160,27 +161,56 @@ func SieveAndVerify(jobId uint64) bool {
 	var q uint64
 	var verified = true
 	me.k = 0
-	for r := 0; r < 8; r++ {
-		for i := reverseLen; i < len(prime)-1; i++ {
-			var j = i
-			var k = 0
-			for ; k < reverseLen; j, k = j-1, k+1 {
-				if prime[j]&reverse[r][k] != 0 {
-					ok++
-					if k > me.k && r == 0 {
-						me.j = j
-						me.k = k
-						me.r = r
-						commonbit := prime[me.j] & reverse[me.r][me.k]
-						var cl = math.Log2(float64(commonbit))
-						pp = me.k<<4 + 1 + 2*(7-int(cl))
-						q = from + uint64(me.j<<4) + uint64(2*cl)
-					}
+
+	// Two structural improvements over the original verify loop:
+	//
+	// 1. Loop order: i outermost, r in the middle, k innermost.
+	//    The original had r outermost, so the 6256-byte window
+	//    prime[i-reverseLen..i] was loaded from L3 eight separate times.
+	//    With i outermost the window is loaded into L1 once and reused
+	//    across all 8 r iterations.
+	//
+	// 2. Word-at-a-time AND: process 8 k values per inner iteration using
+	//    uint64 loads + bits.ReverseBytes64.
+	//    prime[] is scanned backward (j = i-k decreases) while reverse[r]
+	//    is scanned forward (k increases), so byte order is opposite.
+	//    Loading 8 bytes of prime and reversing their order makes the bytes
+	//    align correctly for a single 64-bit AND with 8 bytes of reverse[r].
+	//    reverseLen = 6256 = 782×8, so no tail handling is needed.
+	//
+	//    First non-zero byte of the AND word gives the smallest matching k
+	//    in the chunk: bits.TrailingZeros64(w)/8 is the byte index.
+
+	for i := reverseLen; i < len(prime)-1; i++ {
+		for r := 0; r < 8; r++ {
+			foundK := -1
+			chunks := reverseLen / 8
+			for c := 0; c < chunks; c++ {
+				k0 := c * 8
+				j0 := i - k0
+				// 8 prime bytes going backward from j0 (j0, j0-1, ..., j0-7),
+				// reversed so byte 0 of primeWord = prime[j0] (pairs with reverse[r][k0]).
+				primeWord := bits.ReverseBytes64(binary.LittleEndian.Uint64(prime[j0-7 : j0+1]))
+				revWord := binary.LittleEndian.Uint64(reverse[r][k0 : k0+8])
+				if w := primeWord & revWord; w != 0 {
+					foundK = k0 + bits.TrailingZeros64(w)/8
 					break
 				}
-				if j == 0 {
-					verified = false
+			}
+			if foundK >= 0 {
+				ok++
+				if r == 0 && foundK > me.k {
+					j := i - foundK
+					me.j = j
+					me.k = foundK
+					me.r = r
+					commonbit := prime[j] & reverse[r][foundK]
+					cl := math.Log2(float64(commonbit))
+					pp = me.k<<4 + 1 + 2*(7-int(cl))
+					q = from + uint64(me.j<<4) + uint64(2*cl)
 				}
+			} else {
+				verified = false
 			}
 		}
 	}
