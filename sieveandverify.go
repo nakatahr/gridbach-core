@@ -163,7 +163,6 @@ func SieveAndVerify(jobId uint64) bool {
 	tVerify := time.Now()
 	log.Print("Verifying ...")
 
-	var reverseLen = len(reverse[0])
 	var ok = 0
 	var me MaxElement
 	var pp int

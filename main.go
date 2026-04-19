@@ -6,10 +6,10 @@ import (
 )
 
 // global variables
-var reverseLen = uint64(6256)
+const step uint32 = 100_000_000
+const origin uint64 = 4_000_000_000_000_000_000
+const reverseLen = 6256
 var reverse = make([][]byte, 8)
-var step = uint32(1e8)
-var origin = uint64(4e18)
 
 func main() {
 	if !LoadSievingPrimes() {
