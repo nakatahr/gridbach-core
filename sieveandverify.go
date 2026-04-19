@@ -17,15 +17,15 @@ type MaxElement struct {
 
 // nextMultCache carries the next-multiple offset for each prime across jobs.
 // Avoids recomputing via 64-bit division on every job after the first.
-// Index i corresponds to primeGaps[i] (i.e. the (i+1)-th prime after 3).
+// Index i corresponds to sievingPrimes[i] (i.e. the (i+1)-th prime after 3).
 var nextMultCache []uint64 // absolute number value of next multiple
 var nextMultCacheFrom uint64 // the 'from' value when cache was last updated
 
 func SieveAndVerify(jobId uint64) bool {
 	log.Printf("SieveAndVerify(%d)", jobId)
 
-	if len(primeGaps) == 0 {
-		log.Print("primeGaps not loaded")
+	if len(sievingPrimes) == 0 {
+		log.Print("sievingPrimes not loaded")
 		return false
 	}
 
@@ -38,7 +38,7 @@ func SieveAndVerify(jobId uint64) bool {
 	from = from - (from&0xf) + 1 - reverseLen<<4
 	yz := uint32(to - from + 1)
 
-	// prime[i] bit b represents the odd number (from + 16i + 2b):
+	// segment[i] bit b represents the odd number (from + 16i + 2b):
 	//
 	//      b0  b1  b2  b3  b4  b5  b6  b7
 	// [i0]  1   3   5   7   9  11  13  15   (relative to from)
@@ -47,9 +47,9 @@ func SieveAndVerify(jobId uint64) bool {
 	// To access x,
 	//  i : (x-1)/16    : x>>4
 	//  b : (x%16-1)/2  : (x&15)>>1
-	prime := make([]byte, (to-from+2)>>4)
-	for i := range prime {
-		prime[i] = 0xff
+	segment := make([]byte, (to-from+2)>>4)
+	for i := range segment {
+		segment[i] = 0xff
 	}
 
 	masks := [...]byte{
@@ -75,7 +75,7 @@ func SieveAndVerify(jobId uint64) bool {
 	if nextMultCache == nil || nextMultCacheFrom == 0 {
 		// First call: compute from scratch via division.
 		log.Print("[bench] computing nextMultCache from scratch ...")
-		nextMultCache = make([]uint64, len(primeGaps)+1)
+		nextMultCache = make([]uint64, len(sievingPrimes)+1)
 		p := uint64(3)
 		for i := 0; ; i++ {
 			if p > uint64(xmax) {
@@ -87,8 +87,8 @@ func SieveAndVerify(jobId uint64) bool {
 			if r != 0 { q++ }
 			if q&1 == 0 { q++ }
 			nextMultCache[i] = p * q
-			if i < len(primeGaps) {
-				p += 2 * uint64(primeGaps[i])
+			if i < len(sievingPrimes) {
+				p += 2 * uint64(sievingPrimes[i])
 			} else {
 				break
 			}
@@ -114,8 +114,8 @@ func SieveAndVerify(jobId uint64) bool {
 				}
 			}
 			nextMultCache[i] = mm
-			if i < len(primeGaps) {
-				p += 2 * uint64(primeGaps[i])
+			if i < len(sievingPrimes) {
+				p += 2 * uint64(sievingPrimes[i])
 			}
 		}
 	}
@@ -123,7 +123,7 @@ func SieveAndVerify(jobId uint64) bool {
 
 	log.Printf("[bench] cache build/update: %d ms", time.Since(tSieve).Milliseconds())
 
-	// Mark composite numbers in prime[].
+	// Mark composite numbers in segment[].
 	//
 	// Profiling at origin=4e18, step=1e8 showed ~98M primes in nextMultCache:
 	//   ~3M   p < yz/2  "multi-mark"  — inner loop runs ≥2 times
@@ -145,16 +145,16 @@ func SieveAndVerify(jobId uint64) bool {
 		if ya < yz {
 			if uint32(p) >= halfYz {
 				// Large prime: next multiple is the only one in range.
-				prime[ya>>4] &= masks[(ya&15)>>1]
+				segment[ya>>4] &= masks[(ya&15)>>1]
 			} else {
 				// Put off bit for every multiple.
 				for y := ya; y < yz; y += uint32(p) << 1 {
-					prime[y>>4] &= masks[(y&15)>>1]
+					segment[y>>4] &= masks[(y&15)>>1]
 				}
 			}
 		}
-		if i < len(primeGaps) {
-			p += 2 * uint64(primeGaps[i])
+		if i < len(sievingPrimes) {
+			p += 2 * uint64(sievingPrimes[i])
 		}
 	}
 	log.Printf("[bench] marking: %d ms", time.Since(tMark).Milliseconds())
@@ -175,13 +175,13 @@ func SieveAndVerify(jobId uint64) bool {
 	//
 	// 1. Loop order: i outermost, r in the middle, k innermost.
 	//    The original had r outermost, so the 6256-byte window
-	//    prime[i-reverseLen..i] was loaded from L3 eight separate times.
+	//    segment[i-reverseLen..i] was loaded from L3 eight separate times.
 	//    With i outermost the window is loaded into L1 once and reused
 	//    across all 8 r iterations.
 	//
 	// 2. Word-at-a-time AND: process 8 k values per inner iteration using
 	//    uint64 loads + bits.ReverseBytes64.
-	//    prime[] is scanned backward (j = i-k decreases) while reverse[r]
+	//    segment[] is scanned backward (j = i-k decreases) while reverse[r]
 	//    is scanned forward (k increases), so byte order is opposite.
 	//    Loading 8 bytes of prime and reversing their order makes the bytes
 	//    align correctly for a single 64-bit AND with 8 bytes of reverse[r].
@@ -190,16 +190,16 @@ func SieveAndVerify(jobId uint64) bool {
 	//    First non-zero byte of the AND word gives the smallest matching k
 	//    in the chunk: bits.TrailingZeros64(w)/8 is the byte index.
 
-	for i := reverseLen; i < len(prime)-1; i++ {
+	for i := reverseLen; i < len(segment)-1; i++ {
 		for r := 0; r < 8; r++ {
 			foundK := -1
 			chunks := reverseLen / 8
 			for c := 0; c < chunks; c++ {
 				k0 := c * 8
 				j0 := i - k0
-				// 8 prime bytes going backward from j0 (j0, j0-1, ..., j0-7),
-				// reversed so byte 0 of primeWord = prime[j0] (pairs with reverse[r][k0]).
-				primeWord := bits.ReverseBytes64(binary.LittleEndian.Uint64(prime[j0-7 : j0+1]))
+				// 8 segment bytes going backward from j0 (j0, j0-1, ..., j0-7),
+				// reversed so byte 0 of segWord = segment[j0] (pairs with reverse[r][k0]).
+				primeWord := bits.ReverseBytes64(binary.LittleEndian.Uint64(segment[j0-7 : j0+1]))
 				revWord := binary.LittleEndian.Uint64(reverse[r][k0 : k0+8])
 				if w := primeWord & revWord; w != 0 {
 					foundK = k0 + bits.TrailingZeros64(w)/8
@@ -213,7 +213,7 @@ func SieveAndVerify(jobId uint64) bool {
 					me.j = j
 					me.k = foundK
 					me.r = r
-					commonbit := prime[j] & reverse[r][foundK]
+					commonbit := segment[j] & reverse[r][foundK]
 					cl := math.Log2(float64(commonbit))
 					pp = me.k<<4 + 1 + 2*(7-int(cl))
 					q = from + uint64(me.j<<4) + uint64(2*cl)
