@@ -83,6 +83,7 @@ func SieveAndVerify(jobId uint64) bool {
 				nextMultCache = nextMultCache[:i]
 				break
 			}
+			// Yield the mm (minimum multiple) of p satisfying mm >= from.
 			q, r := bits.Div64(0, from, p)
 			if r != 0 { q++ }
 			if q&1 == 0 { q++ }
@@ -147,7 +148,7 @@ func SieveAndVerify(jobId uint64) bool {
 				// Large prime: next multiple is the only one in range.
 				prime[ya>>4] &= masks[(ya&15)>>1]
 			} else {
-				// Small prime: mark all multiples in range.
+				// Put off bit for every multiple.
 				for y := ya; y < yz; y += uint32(p) << 1 {
 					prime[y>>4] &= masks[(y&15)>>1]
 				}
