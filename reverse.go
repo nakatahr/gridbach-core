@@ -11,8 +11,7 @@ func CreateReverse() bool {
 	log.Print("CreateReverse()")
 
 	// Build a small local sieve covering the first reverseLen bytes
-	// (odd numbers up to reverseLen*16 ≈ 100,096). This avoids depending
-	// on the global root[] array, which no longer exists.
+	// (odd numbers up to reverseLen*16 ≈ 100,096).
 	source := make([]byte, reverseLen)
 	for i := range source {
 		source[i] = 0xff
