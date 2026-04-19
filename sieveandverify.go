@@ -9,29 +9,6 @@ import (
 	"time"
 )
 
-// Parallelism decision (2026-04-19):
-//
-// A goroutine-parallel version (N = runtime.NumCPU()) was benchmarked and
-// reverted for the following reasons:
-//
-//  1. Memory-bandwidth-bound, not compute-bound.
-//     The cache build/advance reads/writes ~784 MB (98M × 8B) and the marking
-//     phase accesses a 6.25 MB prime[] array.  With 7 cores we only achieved
-//     1.5–2.4× speedup on individual phases (vs. the theoretical 7×), and
-//     only ~1.3× end-to-end (sieve + verify).
-//
-//  2. WASM target is single-threaded.
-//     The webapp runs this code compiled to WASM; runtime.NumCPU() returns 1
-//     there, so the parallel paths add complexity with zero benefit for the
-//     primary deployment target.
-//
-//  3. Code complexity outweighs the gain.
-//     Separate clearBits buffers, merge passes, cacheChunk bookkeeping, and
-//     three WaitGroup phases make the code significantly harder to maintain.
-//
-// GPU acceleration is the planned path for future parallelism.  When that
-// work begins, this file will be the natural starting point.
-
 type MaxElement struct {
 	j int
 	k int
