@@ -38,6 +38,15 @@ func SieveAndVerify(jobId uint64) bool {
 	from = from - (from&0xf) + 1 - reverseLen<<4
 	yz := uint32(to - from + 1)
 
+	// prime[i] bit b represents the odd number (from + 16i + 2b):
+	//
+	//      b0  b1  b2  b3  b4  b5  b6  b7
+	// [i0]  1   3   5   7   9  11  13  15   (relative to from)
+	// [i1] 17  19  21  23  25  27  29  31
+	// [i2] 33  35  37  39  41  45  47  49
+	// To access x,
+	//  i : (x-1)/16    : x>>4
+	//  b : (x%16-1)/2  : (x&15)>>1
 	prime := make([]byte, (to-from+2)>>4)
 	for i := range prime {
 		prime[i] = 0xff
@@ -53,16 +62,6 @@ func SieveAndVerify(jobId uint64) bool {
 
 	// Build or update nextMultCache.
 	//
-	// nextMultCache[i] = the absolute odd number that is the smallest
-	// multiple of prime[i] that is >= from.  Stored as an absolute value
-	// (not an offset) so that the advance step for subsequent jobs is a
-	// simple nudge (or one division for small primes) rather than a full
-	// recomputation from scratch every time.
-	//
-	// For small primes (p < step), the nudge loop would run step/(2p) times
-	// — up to 16M iterations for p=3 — so we recompute via bits.Div64
-	// instead.  For large primes (p >= step), the stored value is at most
-	// one step behind, so the nudge loop runs 0 or 1 times and is cheap.
 	// nextMultCache[i] = the absolute odd number that is the smallest
 	// multiple of prime[i] that is >= from.  Stored as an absolute value
 	// (not an offset) so that the advance step for subsequent jobs is a
