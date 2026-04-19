@@ -151,6 +151,9 @@ func SieveAndVerify(jobId uint64) bool {
 				}
 			}
 		}
+		// if ya >= yz: dormant — skip entirely (no marking needed)
+
+		// Advance to the next sieving prime (applies to all cases).
 		if i < len(sievingPrimes) {
 			sp += 2 * uint64(sievingPrimes[i])
 		}
