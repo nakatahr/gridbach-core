@@ -5,8 +5,10 @@ import (
 	"log"
 	"math"
 	"math/bits"
+	"runtime"
+	"sync"
+	"time"
 )
-
 
 type MaxElement struct {
 	j int
@@ -14,142 +16,225 @@ type MaxElement struct {
 	r int
 }
 
+// nextMultCache carries the next-multiple offset for each prime across jobs.
+// Index i corresponds to primeGaps[i] (i.e. the (i+1)-th prime after 3).
+var nextMultCache []uint64 // absolute number value of next multiple
+var nextMultCacheFrom uint64
+
+// cacheChunk marks one goroutine's slice of nextMultCache.
+// Populated during job 1; reused by jobs 2+ for parallel advance and marking.
+type cacheChunk struct {
+	idx   int    // start index in nextMultCache
+	prime uint64 // prime value at idx
+}
+var cacheChunks []cacheChunk
+
+// clearBits[g] accumulates bits that goroutine g wants to clear in prime[].
+// Pre-allocated once; reused each job to avoid GC pressure.
+var clearBits [][]byte
+
 func SieveAndVerify(jobId uint64) bool {
 	log.Printf("SieveAndVerify(%d)", jobId)
 
-	if (root[0] == 0) {
-		log.Print("Root is not initialized")
-		return false;
+	if len(primeGaps) == 0 {
+		log.Print("primeGaps not loaded")
+		return false
 	}
 
-	log.Printf("jobId: %d", jobId)
-	log.Printf("origin: %d", origin) 
-	log.Printf("Sieving from %d to %d", 
-			   	origin + uint64(step) * jobId, 
-				origin + uint64(step) * (jobId + 1))
-	log.Print("Sieving ...")
+	log.Printf("Sieving from %d to %d",
+		origin+uint64(step)*jobId,
+		origin+uint64(step)*(jobId+1))
 
-	// Normalize range for the sake of Goldbach binary verification
-	from := origin + uint64(step) * jobId
+	from := origin + uint64(step)*jobId
 	to := (from+uint64(step)) - ((from+uint64(step))&0xf) + 15
 	from = from - (from&0xf) + 1 - reverseLen<<4
+	yz := uint32(to - from + 1)
 
-	// Prime array
-	var prime = make([]byte, (to-from+2)>>4)
-
-	// Turn all bits on
-	for i := 0; i < len(prime); i++ {
+	prime := make([]byte, (to-from+2)>>4)
+	for i := range prime {
 		prime[i] = 0xff
 	}
 
-	//      b0  b1  b2  b3  b4  b5  b6  b7
-	// [i0]  1   3   5   7   9  11  13  15
-	// [i1] 17  19  21  23  25  27  29  31
-	// [i2] 33  35  37  39  41  45  47  49
-	// To access x,
-	//  i : (x-1)/16    : x>>4
-	//  b : (x%16-1)/2  : (x&15)>>1
-
-	flags := [...]byte{
+	// clearMasks[bit] = 1 << bit: the bit to clear in prime[byte].
+	// Complement of the AND-masks used in the original code.
+	clearMasks := [...]byte{
 		0b00000001, 0b00000010, 0b00000100, 0b00001000,
 		0b00010000, 0b00100000, 0b01000000, 0b10000000}
-	masks := [...]byte{
-		0b11111110, 0b11111101, 0b11111011, 0b11110111,
-		0b11101111, 0b11011111, 0b10111111, 0b01111111}
-	var xmax = uint32(math.Sqrt(float64(to)))
-	var yz = uint32(to - from + 1)
 
-	// --- Cache-friendly segmented sieve ---
-	//
-	// Sieving primes up to xmax (~2e9) are split into two tiers:
-	//
-	// Tier 1 — small primes (x <= smallPrimeLimit, ~78K primes):
-	//   Pre-extracted into a compact slice with one nextMult[] entry each.
-	//   prime[] is processed in 32KB chunks so the working set fits in L1 cache.
-	//   Each chunk is fully sieved by all small primes before moving on.
-	//
-	// Tier 2 — large primes (x > smallPrimeLimit):
-	//   Each contributes at most a handful of marks to prime[], so the
-	//   cache miss cost per prime is low. Handled with the original one-pass
-	//   approach — avoids storing nextMult[] for ~98M large primes (~392MB).
-	//
-	// Crossover: primes larger than the chunk's number span (32KB*16 = 524K)
-	// appear at most once per chunk anyway, so chunking them yields no benefit.
+	xmax := uint32(math.Sqrt(float64(to)))
+	xmaxU := uint64(xmax)
 
-	const chunkBytes = 32 * 1024          // 32KB — fits in L1 cache
-	const smallPrimeLimit = uint32(1 << 20) // ~1M; ~78K primes below this
+	nw := runtime.NumCPU()
+	tSieve := time.Now()
 
-	// Step 1: extract small primes into a compact slice
-	smallXmax := smallPrimeLimit
-	if xmax < smallXmax {
-		smallXmax = xmax
-	}
-	smallPrimes := make([]uint32, 0, 80000)
-	for x := uint32(3); x <= smallXmax; x += 2 {
-		if root[x>>4]&flags[(x&15)>>1] != 0 {
-			smallPrimes = append(smallPrimes, x)
+	if nextMultCache == nil || nextMultCacheFrom == 0 {
+		// --- Job 1 ---
+		// Pass 1 (sequential, ~10 ms): scan primeGaps to count primes ≤ xmax
+		// and record per-goroutine chunk boundaries.
+		log.Print("[bench] scanning primeGaps for chunk boundaries ...")
+		p := uint64(3)
+		nPrimes := 0
+		for i := 0; i < len(primeGaps); i++ {
+			if p > xmaxU { break }
+			nPrimes++
+			p += 2 * uint64(primeGaps[i])
 		}
-	}
+		chunkSize := nPrimes / nw
+		if chunkSize < 1 { chunkSize = 1 }
 
-	// Step 2: compute initial next-odd-multiple of each small prime that falls >= from
-	nextMult := make([]uint32, len(smallPrimes))
-	for i, x := range smallPrimes {
-		q, r := bits.Div64(0, from, uint64(x))
-		if r != 0 {
-			q++
-		}
-		if q&1 == 0 {
-			q++
-		}
-		nextMult[i] = uint32(uint64(x)*q - from)
-	}
-
-	// Step 3: sieve small primes chunk by chunk (working set = one 32KB chunk)
-	for chunkStart := 0; chunkStart < len(prime); chunkStart += chunkBytes {
-		chunkEnd := chunkStart + chunkBytes
-		if chunkEnd > len(prime) {
-			chunkEnd = len(prime)
-		}
-		for i, x := range smallPrimes {
-			y := nextMult[i]
-			for int(y>>4) < chunkEnd {
-				prime[y>>4] &= masks[(y&15)>>1]
-				y += x << 1
-			}
-			nextMult[i] = y
-		}
-	}
-
-	// Step 4: sieve large primes (original one-pass approach)
-	largeXstart := smallPrimeLimit + 1
-	if largeXstart&1 == 0 {
-		largeXstart++
-	}
-	for x := largeXstart; x <= xmax; x += 2 {
-		if root[x>>4]&flags[(x&15)>>1] != 0 {
-			var q, r = bits.Div64(0, from, uint64(x))
-			if r != 0 {
-				q++
-			}
-			if q&1 == 0 {
-				q++
-			}
-			var mm = uint64(x) * q
-			var ya = uint32(mm - from)
-			for y := ya; y < yz; y += x << 1 {
-				prime[y>>4] &= masks[(y&15)>>1]
+		cacheChunks = make([]cacheChunk, 0, nw)
+		cacheChunks = append(cacheChunks, cacheChunk{0, 3})
+		p = uint64(3)
+		count := 0
+		for i := 0; i < len(primeGaps) && len(cacheChunks) < nw; i++ {
+			if p > xmaxU { break }
+			count++
+			p += 2 * uint64(primeGaps[i])
+			if count >= len(cacheChunks)*chunkSize && p <= xmaxU {
+				cacheChunks = append(cacheChunks, cacheChunk{count, p})
 			}
 		}
+
+		// Pass 2 (parallel): build nextMultCache.
+		nextMultCache = make([]uint64, nPrimes)
+		var wgBuild sync.WaitGroup
+		for g, chunk := range cacheChunks {
+			wgBuild.Add(1)
+			go func(g int, lo int, startP uint64) {
+				defer wgBuild.Done()
+				hi := nPrimes
+				if g+1 < len(cacheChunks) {
+					hi = cacheChunks[g+1].idx
+				}
+				p := startP
+				for i := lo; i < hi; i++ {
+					q, r := bits.Div64(0, from, p)
+					if r != 0 { q++ }
+					if q&1 == 0 { q++ }
+					nextMultCache[i] = p * q
+					if i < len(primeGaps) {
+						p += 2 * uint64(primeGaps[i])
+					}
+				}
+			}(g, chunk.idx, chunk.prime)
+		}
+		wgBuild.Wait()
+
+		// Pre-allocate clearBits buffers.
+		clearBits = make([][]byte, len(cacheChunks))
+		for g := range clearBits {
+			clearBits[g] = make([]byte, len(prime))
+		}
+	} else {
+		// --- Jobs 2+: advance nextMultCache in parallel ---
+		log.Print("[bench] advancing nextMultCache ...")
+		stepU := uint64(step)
+		var wgAdv sync.WaitGroup
+		for g, chunk := range cacheChunks {
+			wgAdv.Add(1)
+			go func(g int, lo int, startP uint64) {
+				defer wgAdv.Done()
+				hi := len(nextMultCache)
+				if g+1 < len(cacheChunks) {
+					hi = cacheChunks[g+1].idx
+				}
+				p := startP
+				for i := lo; i < hi; i++ {
+					var mm uint64
+					if p < stepU {
+						q, r := bits.Div64(0, from, p)
+						if r != 0 { q++ }
+						if q&1 == 0 { q++ }
+						mm = p * q
+					} else {
+						mm = nextMultCache[i]
+						for mm < from {
+							mm += 2 * p
+						}
+					}
+					nextMultCache[i] = mm
+					if i < len(primeGaps) {
+						p += 2 * uint64(primeGaps[i])
+					}
+				}
+			}(g, chunk.idx, chunk.prime)
+		}
+		wgAdv.Wait()
 	}
+	nextMultCacheFrom = from
+
+	log.Printf("[bench] cache build/update: %d ms", time.Since(tSieve).Milliseconds())
+
+	// --- Parallel marking ---
+	// Each goroutine marks its share of primes into clearBits[g] (OR of bit masks),
+	// then the merge step ANDs the inverse into prime[].
+	tMark := time.Now()
+
+	nBufs := len(cacheChunks)
+	// Grow clearBits if prime[] grew (shouldn't normally happen).
+	for g := range clearBits {
+		if len(clearBits[g]) < len(prime) {
+			clearBits[g] = make([]byte, len(prime))
+		}
+	}
+
+	var wgMark sync.WaitGroup
+	for g, chunk := range cacheChunks {
+		wgMark.Add(1)
+		go func(g int, lo int, startP uint64) {
+			defer wgMark.Done()
+			hi := len(nextMultCache)
+			if g+1 < len(cacheChunks) {
+				hi = cacheChunks[g+1].idx
+			}
+			p := startP
+			cb := clearBits[g]
+			for i := range cb[:len(prime)] {
+				cb[i] = 0
+			}
+			for i := lo; i < hi; i++ {
+				ya := uint32(nextMultCache[i] - from)
+				for y := ya; y < yz; y += uint32(p) << 1 {
+					cb[y>>4] |= clearMasks[(y&15)>>1]
+				}
+				if i < len(primeGaps) {
+					p += 2 * uint64(primeGaps[i])
+				}
+			}
+		}(g, chunk.idx, chunk.prime)
+	}
+	wgMark.Wait()
+
+	// Merge: clear the accumulated bits from all goroutines.
+	var wgMerge sync.WaitGroup
+	mergeChunk := (len(prime) + nBufs - 1) / nBufs
+	for g := 0; g < nBufs; g++ {
+		wgMerge.Add(1)
+		go func(g int) {
+			defer wgMerge.Done()
+			lo := g * mergeChunk
+			hi := lo + mergeChunk
+			if hi > len(prime) { hi = len(prime) }
+			for i := lo; i < hi; i++ {
+				var combined byte
+				for h := 0; h < nBufs; h++ {
+					combined |= clearBits[h][i]
+				}
+				prime[i] &= ^combined
+			}
+		}(g)
+	}
+	wgMerge.Wait()
+
+	log.Printf("[bench] marking: %d ms", time.Since(tMark).Milliseconds())
+	log.Printf("[bench] sieve total: %d ms", time.Since(tSieve).Milliseconds())
 
 	log.Print("Verifying ...")
 
-	// The loop for verification
-	// TODO: add comments for clarity
 	var reverseLen = len(reverse[0])
 	var ok = 0
 	var me MaxElement
-	var p int
+	var pp int
 	var q uint64
 	var verified = true
 	me.k = 0
@@ -166,7 +251,7 @@ func SieveAndVerify(jobId uint64) bool {
 						me.r = r
 						commonbit := prime[me.j] & reverse[me.r][me.k]
 						var cl = math.Log2(float64(commonbit))
-						p = me.k<<4 + 1 + 2*(7-int(cl))
+						pp = me.k<<4 + 1 + 2*(7-int(cl))
 						q = from + uint64(me.j<<4) + uint64(2*cl)
 					}
 					break
@@ -179,7 +264,7 @@ func SieveAndVerify(jobId uint64) bool {
 	}
 
 	log.Printf("Goldbach verification: %t", verified)
-	log.Printf("Goldbach partition: (%d, %d)", p, q)
+	log.Printf("Goldbach partition: (%d, %d)", pp, q)
 
-	return true;
+	return true
 }
