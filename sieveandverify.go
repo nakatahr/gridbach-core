@@ -82,7 +82,6 @@ func SieveAndVerify(jobId uint64) bool {
 				nextMultCache = nextMultCache[:i]
 				break
 			}
-			// Yield the mm (minimum multiple) of p satisfying mm >= from.
 			q, r := bits.Div64(0, from, p)
 			if r != 0 { q++ }
 			if q&1 == 0 { q++ }
