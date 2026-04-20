@@ -61,17 +61,6 @@ func SieveAndVerify(jobId uint64) bool {
 	tSieve := time.Now()
 
 	// Build or update nextMultCache.
-	//
-	// nextMultCache[i] = the absolute odd number that is the smallest
-	// multiple of prime[i] that is >= from.  Stored as an absolute value
-	// (not an offset) so that the advance step for subsequent jobs is a
-	// simple nudge (or one division for small primes) rather than a full
-	// recomputation from scratch every time.
-	//
-	// For small primes (p < step), the nudge loop would run step/(2p) times
-	// — up to 16M iterations for p=3 — so we recompute via bits.Div64
-	// instead.  For large primes (p >= step), the stored value is at most
-	// one step behind, so the nudge loop runs 0 or 1 times and is cheap.
 	if nextMultCache == nil || nextMultCacheFrom == 0 {
 		// First call: compute from scratch via division.
 		log.Print("[bench] computing nextMultCache from scratch ...")
