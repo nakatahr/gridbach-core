@@ -3,21 +3,29 @@ package main
 
 import (
 	"log"
+	"math"
 	"math/bits"
 )
 
 func CreateReverse() bool {
 	log.Print("CreateReverse()")
 
-	if (root[0] == 0) {
-		log.Print("root is not initialized")
-		return false;
+	// Build a small local sieve covering the first reverseLen bytes
+	// (odd numbers up to reverseLen*16 ≈ 100,096).
+	source := make([]byte, reverseLen)
+	for i := range source {
+		source[i] = 0xff
 	}
-
-	// Copy root to source
-	// Note that copy() is safe to specify smaller size array as destination
-	var source = make([]byte, reverseLen)
-	copy(source, root)
+	source[0] = 0xfe // 1 is not prime
+	limit := uint64(reverseLen) * 16
+	xmax := uint64(math.Sqrt(float64(limit)))
+	for x := uint64(3); x <= xmax; x += 2 {
+		if source[x>>4]&(1<<((x&15)>>1)) != 0 {
+			for y := x * 3; y < limit; y += x << 1 {
+				source[y>>4] &= byte(^(1 << ((y & 15) >> 1)))
+			}
+		}
+	}
 
 	for i := 0; i < len(reverse); i++ {
 		reverse[i] = make([]byte, reverseLen)
