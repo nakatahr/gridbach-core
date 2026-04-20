@@ -36,7 +36,7 @@ func SieveAndVerify(jobId uint64) bool {
 	from := origin + uint64(step)*jobId
 	to := (from+uint64(step)) - ((from+uint64(step))&0xf) + 15
 	from = from - (from&0xf) + 1 - reverseLen<<4
-	yz := uint32(to - from + 1)
+	xz := uint32(to - from + 1)
 
 	// segment[i] bit b represents the odd number (from + 16i + 2b):
 	//
@@ -124,9 +124,9 @@ func SieveAndVerify(jobId uint64) bool {
 	// Mark composite numbers in segment[].
 	//
 	// Profiling at origin=4e18, step=1e8 showed ~98M primes in nextMultCache:
-	//   ~3M   sp < yz/2  "multi-mark"  — inner loop runs ≥2 times
-	//   ~9.5M sp ≥ yz/2  "single-mark" — next multiple is the only one in range
-	//   ~85.8M           "dormant"     — ya ≥ yz, next multiple is outside range
+	//   ~3M   sp < xz/2  "multi-mark"  — inner loop runs ≥2 times
+	//   ~9.5M sp ≥ xz/2  "single-mark" — next multiple is the only one in range
+	//   ~85.8M           "dormant"     — xa ≥ xz, next multiple is outside range
 	//
 	// Skipping dormant primes early and using a direct mark for single-mark
 	// primes avoids inner-loop overhead for 97% of primes.
@@ -136,22 +136,22 @@ func SieveAndVerify(jobId uint64) bool {
 	// memory-bandwidth savings (~44ms) were outweighed by the IPC loss (~200ms).
 	// Separate tight loops remain faster.
 	tMark := time.Now()
-	halfYz := yz >> 1
+	halfXz := xz >> 1
 	sp := uint64(3)
 	for i, cache := range nextMultCache {
-		ya := uint32(cache - from)
-		if ya < yz {
-			if uint32(sp) >= halfYz {
+		xa := uint32(cache - from)
+		if xa < xz {
+			if uint32(sp) >= halfXz {
 				// Large prime: next multiple is the only one in range.
-				segment[ya>>4] &= masks[(ya&15)>>1]
+				segment[xa>>4] &= masks[(xa&15)>>1]
 			} else {
 				// Put off bit for every multiple.
-				for y := ya; y < yz; y += uint32(sp) << 1 {
-					segment[y>>4] &= masks[(y&15)>>1]
+				for x := xa; x < xz; x += uint32(sp) << 1 {
+					segment[x>>4] &= masks[(x&15)>>1]
 				}
 			}
 		}
-		// if ya >= yz: dormant — skip entirely (no marking needed)
+		// if xa >= xz: dormant — skip entirely (no marking needed)
 
 		// Advance to the next sieving prime (applies to all cases).
 		if i < len(sievingPrimes) {
