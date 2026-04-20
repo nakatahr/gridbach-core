@@ -134,7 +134,7 @@ func SieveAndVerify(jobId uint64) bool {
 				// Large prime: next multiple is the only one in range.
 				segment[xa>>4] &= masks[(xa&15)>>1]
 			} else {
-				// Put off bit for every multiple.
+				// Small prime: put off bit for every multiple.
 				for x := xa; x < xz; x += uint32(sp) << 1 {
 					segment[x>>4] &= masks[(x&15)>>1]
 				}
