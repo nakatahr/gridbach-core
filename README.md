@@ -1,3 +1,5 @@
+**⚠️  Archived.** `gridbach-core` was the original Go CLI kernel used in Gridbach's early verification runs. It has been retired after a Go-in-WASM performance barrier prompted a successor implementation. Active development has moved to [gridbach-kernel](https://github.com/nakatahr/gridbach-kernel) — see that repo for current releases.
+
 # gridbach-core
 Gridbach's core algorithmic logic
 
